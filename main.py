@@ -227,7 +227,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if ch_from == 119 and ch_to == 119 and os.path.exists(PS119_PARTS_PATH):
         parts = load_ps119_parts(PS119_PARTS_PATH)
         if str(day) in parts:
-            full = f"{header}פרק קי"ט — חלק יום {day}\n\n{parts[str(day)]}"
+            full = f"{header}פרק קי"ט - חלק יום {day}\n\n{parts[str(day)]}"
             await send_text_with_nav(update, full)
             return
 
