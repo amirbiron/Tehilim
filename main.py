@@ -331,6 +331,38 @@ def fetch_psalm(n: int) -> str:
     return "\n".join(lines).strip()
 
 
+def download_all_texts(data_path: str, ps119_parts_path: str) -> None:
+    data_dir = os.path.dirname(data_path) or "."
+    os.makedirs(data_dir, exist_ok=True)
+    out: Dict[str, str] = {}
+    for n in range(1, MAX_CHAPTER + 1):
+        out[str(n)] = fetch_psalm(n)
+    with open(data_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    parts_dir = os.path.dirname(ps119_parts_path) or "."
+    os.makedirs(parts_dir, exist_ok=True)
+    if not os.path.exists(ps119_parts_path):
+        parts = {
+            "25": "הדבק כאן חלק 1 של קי\"ט.",
+            "26": "הדבק כאן חלק 2 של קי\"ט.",
+            "27": "הדבק כאן חלק 3 של קי\"ט.",
+            "28": "הדבק כאן חלק 4 של קי\"ט.",
+        }
+        with open(ps119_parts_path, "w", encoding="utf-8") as f:
+            json.dump(parts, f, ensure_ascii=False, indent=2)
+
+
+def ensure_texts_present() -> None:
+    if os.path.exists(DATA_PATH):
+        return
+    logger.info("Data file %s not found; downloading Psalms...", DATA_PATH)
+    download_all_texts(DATA_PATH, PS119_PARTS_PATH)
+    global _tehillim_cache, _ps119_parts
+    _tehillim_cache = {}
+    _ps119_parts = {}
+    logger.info("Downloaded Tehillim texts to %s", DATA_PATH)
+
+
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID and str(user_id) == str(ADMIN_USER_ID)
 
@@ -482,26 +514,11 @@ async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("פקודה זו מיועדת למנהל בלבד.")
         return
     await update.message.reply_text("מתחיל למשוך טקסטים (1–150)...")
-    data_dir = os.path.dirname(DATA_PATH) or "."
-    os.makedirs(data_dir, exist_ok=True)
-    out: Dict[str, str] = {}
     try:
-        for n in range(1, 151):
-            out[str(n)] = fetch_psalm(n)
-        with open(DATA_PATH, "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
+        download_all_texts(DATA_PATH, PS119_PARTS_PATH)
     except Exception as e:
         await update.message.reply_text(f"שגיאה במשיכה: {e}")
         return
-    if not os.path.exists(PS119_PARTS_PATH):
-        parts = {
-            "25": "הדבק כאן חלק 1 של קי\"ט.",
-            "26": "הדבק כאן חלק 2 של קי\"ט.",
-            "27": "הדבק כאן חלק 3 של קי\"ט.",
-            "28": "הדבק כאן חלק 4 של קי\"ט.",
-        }
-        with open(PS119_PARTS_PATH, "w", encoding="utf-8") as f:
-            json.dump(parts, f, ensure_ascii=False, indent=2)
     # Invalidate in-memory caches so subsequent calls reload from disk
     _tehillim_cache = {}
     _ps119_parts = {}
@@ -611,6 +628,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 def main() -> None:
     if not BOT_TOKEN:
         raise SystemExit("Missing BOT_TOKEN env var")
+
+    # Ensure texts exist on disk (first run on a new disk will auto-download)
+    try:
+        ensure_texts_present()
+    except Exception as e:
+        logger.exception("Failed ensuring texts present: %s", e)
 
     app = Application.builder().token(BOT_TOKEN).build()
 

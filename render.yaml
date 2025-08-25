@@ -11,7 +11,9 @@ services:
       - key: BOT_TOKEN
         sync: false
       - key: DATA_PATH
-        value: data/tehillim.json
+        value: /data/tehillim.json
+      - key: PS119_PARTS_PATH
+        value: /data/psalm119_parts.json
       - key: DB_PATH
         value: /data/bookmarks.db
       - key: TZ_NAME
