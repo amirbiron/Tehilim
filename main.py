@@ -354,10 +354,12 @@ def build_nav_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("♻️ איפוס", callback_data="reset"),
         ],
         [
-            InlineKeyboardButton(monthly_label, callback_data="daily"),
             InlineKeyboardButton("📅 שבועי", callback_data="weekly"),
             InlineKeyboardButton("📖 רגיל", callback_data="regular"),
-        ]
+        ],
+        [
+            InlineKeyboardButton(monthly_label, callback_data="daily"),
+        ],
     ]
     return InlineKeyboardMarkup(buttons)
 
