@@ -99,6 +99,11 @@ def set_chapter(user_id: int, chapter: int) -> None:
     conn.commit()
 
 def build_nav_keyboard() -> InlineKeyboardMarkup:
+    # Compute today's monthly range for dynamic button label
+    now = tznow()
+    day = now.day if now.day <= 30 else 30
+    ch_from, ch_to = DAILY_SPLIT[day]
+    monthly_label = f"🗓️ חודשי ({render_range(ch_from, ch_to)})"
     buttons = [
         [
             InlineKeyboardButton("◀️ הקודם", callback_data="prev"),
@@ -109,7 +114,7 @@ def build_nav_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("♻️ איפוס", callback_data="reset"),
         ],
         [
-            InlineKeyboardButton("🗓️ חודשי", callback_data="daily"),
+            InlineKeyboardButton(monthly_label, callback_data="daily"),
             InlineKeyboardButton("📅 שבועי", callback_data="weekly"),
         ]
     ]
