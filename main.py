@@ -251,6 +251,7 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await send_text_with_nav(update, header + "\n".join(texts))
 
 async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _tehillim_cache, _ps119_parts
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("פקודה זו מיועדת למנהל בלבד.")
@@ -276,6 +277,9 @@ async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         }
         with open(PS119_PARTS_PATH, "w", encoding="utf-8") as f:
             json.dump(parts, f, ensure_ascii=False, indent=2)
+    # Invalidate in-memory caches so subsequent calls reload from disk
+    _tehillim_cache = {}
+    _ps119_parts = {}
     await update.message.reply_text("הטקסטים נשמרו בהצלחה.")
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
