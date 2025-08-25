@@ -1,5 +1,7 @@
 import os
 import json
+import re
+import html
 import sqlite3
 import logging
 from datetime import datetime
@@ -207,13 +209,75 @@ def render_range(ch_from: int, ch_to: int) -> str:
 
 API = "https://www.sefaria.org/api/texts/Psalms.{n}?lang=he"
 
+def clean_sefaria_text(raw: str) -> str:
+    # Convert line-break tags to newlines
+    text = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+    # Remove all remaining HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Decode HTML entities (&thinsp;, &nbsp;, etc.)
+    text = html.unescape(text)
+    # Remove cantillation marks (Ta'amei haMikra) and similar diacritics
+    text = re.sub(r"[\u0591-\u05AF\u05BD\u05BF]", "", text)
+    # Remove Hebrew paseq (looks like vertical bar) and replace maqaf with space
+    text = text.replace("\u05C0", "")  # paseq ׀
+    text = text.replace("\u05BE", " ")  # maqaf ׂ־ (upper hyphen) -> space
+    # Also strip any ASCII vertical bars that might slip through
+    text = text.replace("|", "")
+    # Normalize special spaces to regular spaces
+    text = (
+        text
+        .replace("\u2009", " ")  # thin space
+        .replace("\u200a", " ")  # hair space
+        .replace("\u202f", " ")  # narrow no-break space
+        .replace("\xa0", " ")   # non-breaking space
+    )
+    # Collapse repeated spaces (not across newlines)
+    text = re.sub(r"[ \t]+", " ", text)
+    # Trim trailing spaces per line and overall
+    text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
+    return text
+
+def to_hebrew_numeral(n: int) -> str:
+    units = ["", "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט"]
+    tens = ["", "י", "כ", "ל", "מ", "נ", "ס", "ע", "פ", "צ"]
+    hundreds = ["", "ק", "ר", "ש", "ת"]
+    if n <= 0:
+        return str(n)
+    parts = []
+    # Hundreds (up to 400)
+    h = n // 100
+    if h:
+        parts.append(hundreds[h])
+    n = n % 100
+    # Special cases 15 and 16 to avoid forming divine name
+    if n == 15:
+        parts.append("ט" + "ו")
+        n = 0
+    elif n == 16:
+        parts.append("ט" + "ז")
+        n = 0
+    # Tens
+    t = n // 10
+    if t:
+        parts.append(tens[t])
+    # Units
+    u = n % 10
+    if u:
+        parts.append(units[u])
+    return "".join(parts) or "א"
+
 def fetch_psalm(n: int) -> str:
     url = API.format(n=n)
     r = requests.get(url, timeout=20)
     r.raise_for_status()
     js = r.json()
     verses = js.get("he") or []
-    return "\n".join(verses).strip()
+    lines = []
+    for i, v in enumerate(verses, start=1):
+        cleaned = clean_sefaria_text(v)
+        numeral = to_hebrew_numeral(i)
+        lines.append(f"{numeral}. {cleaned}")
+    return "\n".join(lines).strip()
 
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID and str(user_id) == str(ADMIN_USER_ID)
@@ -251,6 +315,7 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await send_text_with_nav(update, header + "\n".join(texts))
 
 async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _tehillim_cache, _ps119_parts
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("פקודה זו מיועדת למנהל בלבד.")
@@ -276,6 +341,9 @@ async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         }
         with open(PS119_PARTS_PATH, "w", encoding="utf-8") as f:
             json.dump(parts, f, ensure_ascii=False, indent=2)
+    # Invalidate in-memory caches so subsequent calls reload from disk
+    _tehillim_cache = {}
+    _ps119_parts = {}
     await update.message.reply_text("הטקסטים נשמרו בהצלחה.")
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
