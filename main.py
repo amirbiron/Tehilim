@@ -218,6 +218,11 @@ def clean_sefaria_text(raw: str) -> str:
     text = html.unescape(text)
     # Remove cantillation marks (Ta'amei haMikra) and similar diacritics
     text = re.sub(r"[\u0591-\u05AF\u05BD\u05BF]", "", text)
+    # Remove Hebrew paseq (looks like vertical bar) and replace maqaf with space
+    text = text.replace("\u05C0", "")  # paseq ׀
+    text = text.replace("\u05BE", " ")  # maqaf ׂ־ (upper hyphen) -> space
+    # Also strip any ASCII vertical bars that might slip through
+    text = text.replace("|", "")
     # Normalize special spaces to regular spaces
     text = (
         text
