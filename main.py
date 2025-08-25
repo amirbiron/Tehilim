@@ -1,5 +1,7 @@
 import os
 import json
+import re
+import html
 import sqlite3
 import logging
 from datetime import datetime
@@ -207,13 +209,35 @@ def render_range(ch_from: int, ch_to: int) -> str:
 
 API = "https://www.sefaria.org/api/texts/Psalms.{n}?lang=he"
 
+def clean_sefaria_text(raw: str) -> str:
+    # Convert line-break tags to newlines
+    text = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+    # Remove all remaining HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Decode HTML entities (&thinsp;, &nbsp;, etc.)
+    text = html.unescape(text)
+    # Normalize special spaces to regular spaces
+    text = (
+        text
+        .replace("\u2009", " ")  # thin space
+        .replace("\u200a", " ")  # hair space
+        .replace("\u202f", " ")  # narrow no-break space
+        .replace("\xa0", " ")   # non-breaking space
+    )
+    # Collapse repeated spaces (not across newlines)
+    text = re.sub(r"[ \t]+", " ", text)
+    # Trim trailing spaces per line and overall
+    text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
+    return text
+
 def fetch_psalm(n: int) -> str:
     url = API.format(n=n)
     r = requests.get(url, timeout=20)
     r.raise_for_status()
     js = r.json()
     verses = js.get("he") or []
-    return "\n".join(verses).strip()
+    raw = "\n".join(verses).strip()
+    return clean_sefaria_text(raw)
 
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID and str(user_id) == str(ADMIN_USER_ID)
