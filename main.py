@@ -287,32 +287,37 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     day = now.day if now.day <= 30 else 30
     ch_from, ch_to = DAILY_SPLIT[day]
     header = f"חלוקה יומית (ל' בחודש) — יום {day}: {render_range(ch_from, ch_to)}\n\n"
-
+    user_id = update.effective_user.id
+    # If it's a Psalm 119 day and parts exist, show only the relevant part text
     if ch_from == 119 and ch_to == 119 and os.path.exists(PS119_PARTS_PATH):
         parts = load_ps119_parts(PS119_PARTS_PATH)
-        if str(day) in parts:
-            full = f"{header}פרק קי\"ט - חלק יום {day}\n\n{parts[str(day)]}"
+        part_text = parts.get(str(day))
+        if part_text:
+            # Align next/prev to regular reading starting at 119 on these days
+            set_chapter(user_id, 119)
+            full = f"{header}פרק קי\"ט - חלק יום {day}\n\n{part_text}"
             await send_text_with_nav(update, full)
             return
 
+    # Otherwise, send only the first chapter in the day's range and set bookmark
+    set_chapter(user_id, ch_from)
     data = load_tehillim(DATA_PATH)
-    texts = []
-    for ch in range(ch_from, ch_to + 1):
-        t = data.get(str(ch), f"[חסר טקסט לפרק {ch}]")
-        texts.append(f"— פרק {ch} —\n{t}\n")
-    await send_text_with_nav(update, header + "\n".join(texts))
+    t = data.get(str(ch_from), f"[חסר טקסט לפרק {ch_from}]")
+    full = f"{header}— פרק {ch_from} —\n{t}\n"
+    await send_text_with_nav(update, full)
 
 async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = tznow()
     weekday = now.isoweekday()  # Mon=1..Sun=7
     ch_from, ch_to = WEEKLY_SPLIT[weekday]
     header = f"חלוקה שבועית — יום {weekday}: {render_range(ch_from, ch_to)}\n\n"
+    # Send only the first chapter of the weekly split, and set bookmark so nav works
+    user_id = update.effective_user.id
+    set_chapter(user_id, ch_from)
     data = load_tehillim(DATA_PATH)
-    texts = []
-    for ch in range(ch_from, ch_to + 1):
-        t = data.get(str(ch), f"[חסר טקסט לפרק {ch}]")
-        texts.append(f"— פרק {ch} —\n{t}\n")
-    await send_text_with_nav(update, header + "\n".join(texts))
+    t = data.get(str(ch_from), f"[חסר טקסט לפרק {ch_from}]")
+    full = f"{header}— פרק {ch_from} —\n{t}\n"
+    await send_text_with_nav(update, full)
 
 async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global _tehillim_cache, _ps119_parts
