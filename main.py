@@ -216,6 +216,8 @@ def clean_sefaria_text(raw: str) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     # Decode HTML entities (&thinsp;, &nbsp;, etc.)
     text = html.unescape(text)
+    # Remove cantillation marks (Ta'amei haMikra) and similar diacritics
+    text = re.sub(r"[\u0591-\u05AF\u05BD\u05BF]", "", text)
     # Normalize special spaces to regular spaces
     text = (
         text
@@ -230,14 +232,47 @@ def clean_sefaria_text(raw: str) -> str:
     text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
     return text
 
+def to_hebrew_numeral(n: int) -> str:
+    units = ["", "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט"]
+    tens = ["", "י", "כ", "ל", "מ", "נ", "ס", "ע", "פ", "צ"]
+    hundreds = ["", "ק", "ר", "ש", "ת"]
+    if n <= 0:
+        return str(n)
+    parts = []
+    # Hundreds (up to 400)
+    h = n // 100
+    if h:
+        parts.append(hundreds[h])
+    n = n % 100
+    # Special cases 15 and 16 to avoid forming divine name
+    if n == 15:
+        parts.append("ט" + "ו")
+        n = 0
+    elif n == 16:
+        parts.append("ט" + "ז")
+        n = 0
+    # Tens
+    t = n // 10
+    if t:
+        parts.append(tens[t])
+    # Units
+    u = n % 10
+    if u:
+        parts.append(units[u])
+    return "".join(parts) or "א"
+
 def fetch_psalm(n: int) -> str:
     url = API.format(n=n)
     r = requests.get(url, timeout=20)
     r.raise_for_status()
     js = r.json()
     verses = js.get("he") or []
-    raw = "\n".join(verses).strip()
-    return clean_sefaria_text(raw)
+    lines = []
+    for i, v in enumerate(verses, start=1):
+        cleaned = clean_sefaria_text(v)
+        numeral = to_hebrew_numeral(i)
+        lines.append(f"{numeral}. {cleaned}")
+    return "\n".join(lines).strip()
 
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID and str(user_id) == str(ADMIN_USER_ID)
