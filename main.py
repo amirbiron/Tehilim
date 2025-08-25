@@ -496,6 +496,19 @@ async def edit_nav_message(q, text: str) -> None:
         raise
 
 
+async def edit_nav_message_by_ids(bot, chat_id: int, message_id: int, text: str) -> None:
+    try:
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=build_nav_keyboard())
+    except BadRequest as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            return
+        if "message is too long" in msg:
+            trimmed = trim_for_edit(text)
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=trimmed, reply_markup=build_nav_keyboard())
+            return
+        raise
+
 def normalize_chapter(n: int) -> int:
     if n < 1:
         return MAX_CHAPTER
@@ -659,6 +672,11 @@ async def cmd_goto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reporter.report_activity(update.effective_user.id)
     await update.message.reply_text("הקלד/י מספר פרק (1–150):")
     context.user_data["awaiting_goto"] = True
+    # אם נכנסנו ל-goto דרך לחצן inline, נשמור את ההודעה לעריכה בהמשך
+    if update.callback_query:
+        q = update.callback_query
+        context.user_data["goto_target_chat_id"] = q.message.chat_id
+        context.user_data["goto_target_message_id"] = q.message.message_id
 
 
 async def on_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -673,7 +691,16 @@ async def on_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text("טווח חוקי: 1–150.")
             return
         context.user_data["awaiting_goto"] = False
-        await send_chapter(update, context, n)
+        # אם יש הודעת יעד לעריכה (לחצן inline), נערוך אותה במקום
+        chat_id = context.user_data.pop("goto_target_chat_id", None)
+        message_id = context.user_data.pop("goto_target_message_id", None)
+        user_id = update.effective_user.id
+        mode = get_current_mode(user_id)
+        if chat_id and message_id:
+            text = build_chapter_message(user_id, mode, n)
+            await edit_nav_message_by_ids(context.bot, chat_id, message_id, text)
+        else:
+            await send_chapter(update, context, n)
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -702,6 +729,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     elif data == "goto":
         await q.message.reply_text("הקלד/י מספר פרק (1–150):")
         context.user_data["awaiting_goto"] = True
+        context.user_data["goto_target_chat_id"] = q.message.chat_id
+        context.user_data["goto_target_message_id"] = q.message.message_id
     elif data == "daily":
         text = build_daily_message_for_user(user_id)
         await edit_nav_message(q, text)
