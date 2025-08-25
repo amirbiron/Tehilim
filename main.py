@@ -109,7 +109,7 @@ def build_nav_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("♻️ איפוס", callback_data="reset"),
         ],
         [
-            InlineKeyboardButton("🗓️ יומי", callback_data="daily"),
+            InlineKeyboardButton("🗓️ חודשי", callback_data="daily"),
             InlineKeyboardButton("📅 שבועי", callback_data="weekly"),
         ]
     ]
@@ -286,7 +286,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = tznow()
     day = now.day if now.day <= 30 else 30
     ch_from, ch_to = DAILY_SPLIT[day]
-    header = f"חלוקה יומית (ל' בחודש) — יום {day}: {render_range(ch_from, ch_to)}\n\n"
+    header = f"חלוקה חודשית — יום {day}: {render_range(ch_from, ch_to)}\n\n"
     user_id = update.effective_user.id
     # If it's a Psalm 119 day and parts exist, show only the relevant part text
     if ch_from == 119 and ch_to == 119 and os.path.exists(PS119_PARTS_PATH):
@@ -299,12 +299,24 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await send_text_with_nav(update, full)
             return
 
-    # Otherwise, send only the first chapter in the day's range and set bookmark
+    # Otherwise, send all chapters in the day's monthly range.
     set_chapter(user_id, ch_from)
     data = load_tehillim(DATA_PATH)
-    t = data.get(str(ch_from), f"[חסר טקסט לפרק {ch_from}]")
-    full = f"{header}— פרק {ch_from} —\n{t}\n"
-    await send_text_with_nav(update, full)
+    parts: List[str] = [header]
+    for n in range(ch_from, ch_to + 1):
+        txt = data.get(str(n))
+        if not txt:
+            try:
+                txt = fetch_psalm(n)
+                data[str(n)] = txt
+                # Persist back to file so next time it's available
+                os.makedirs(os.path.dirname(DATA_PATH) or ".", exist_ok=True)
+                with open(DATA_PATH, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                txt = f"[חסר טקסט לפרק {n}]"
+        parts.append(f"— פרק {n} —\n{txt}\n")
+    await send_text_with_nav(update, "".join(parts))
 
 async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = tznow()
