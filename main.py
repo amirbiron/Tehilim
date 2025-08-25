@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 from zoneinfo import ZoneInfo
 import requests
+from convertdate import hebrew
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -99,9 +100,10 @@ def set_chapter(user_id: int, chapter: int) -> None:
     conn.commit()
 
 def build_nav_keyboard() -> InlineKeyboardMarkup:
-    # Compute today's monthly range for dynamic button label
+    # Compute today's monthly range (Hebrew calendar) for dynamic button label
     now = tznow()
-    day = now.day if now.day <= 30 else 30
+    hy, hm, hd = hebrew.from_gregorian(now.year, now.month, now.day)
+    day = hd if hd <= 30 else 30
     ch_from, ch_to = DAILY_SPLIT[day]
     monthly_label = f"🗓️ חודשי ({render_range(ch_from, ch_to)})"
     buttons = [
@@ -212,6 +214,20 @@ def tznow() -> datetime:
 def render_range(ch_from: int, ch_to: int) -> str:
     return f"פרק {ch_from}" if ch_from == ch_to else f"פרקים {ch_from}–{ch_to}"
 
+def to_hebrew_date_str(dt: datetime) -> str:
+    y, m, d = hebrew.from_gregorian(dt.year, dt.month, dt.day)
+    months = [
+        "", "תשרי", "חשוון", "כסלו", "טבת", "שבט", "אדר א'", "אדר", "ניסן",
+        "אייר", "סיוון", "תמוז", "אב", "אלול"
+    ]
+    # Adjust Adar in non-leap years: library returns 7 for Adar in leap years (Adar I), 8 for Adar II
+    # For non-leap years, the month index 7 is Adar.
+    is_leap = hebrew.leap(y)
+    name = months[m]
+    if not is_leap and m == 7:
+        name = "אדר"
+    return f"{d} ב{name} {y}"
+
 API = "https://www.sefaria.org/api/texts/Psalms.{n}?lang=he"
 
 def clean_sefaria_text(raw: str) -> str:
@@ -289,9 +305,11 @@ def is_admin(user_id: int) -> bool:
 
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = tznow()
-    day = now.day if now.day <= 30 else 30
+    hy, hm, hd = hebrew.from_gregorian(now.year, now.month, now.day)
+    day = hd if hd <= 30 else 30
     ch_from, ch_to = DAILY_SPLIT[day]
-    header = f"חלוקה חודשית — יום {day}: {render_range(ch_from, ch_to)}\n\n"
+    heb_date = to_hebrew_date_str(now)
+    header = f"חלוקה חודשית — {heb_date} (יום {day}): {render_range(ch_from, ch_to)}\n\n"
     user_id = update.effective_user.id
     # If it's a Psalm 119 day and parts exist, show only the relevant part text
     if ch_from == 119 and ch_to == 119 and os.path.exists(PS119_PARTS_PATH):
