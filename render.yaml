@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: tehillim-bot
+    env: python
+    autoDeploy: true
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    envVars:
+      - key: ADMIN_USER_ID
+        value: "YOUR_TELEGRAM_USER_ID"
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATA_PATH
+        value: data/tehillim.json
+      - key: DB_PATH
+        value: /data/bookmarks.db
+      - key: TZ_NAME
+        value: Asia/Jerusalem
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
