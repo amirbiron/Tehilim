@@ -15,6 +15,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
     ContextTypes, filters
 )
+from telegram.error import BadRequest
 
 from activity_reporter import create_reporter
 
@@ -412,6 +413,89 @@ def split_to_chunks(text: str, limit: int = 3500) -> List[str]:
     return chunks or [text]
 
 
+def build_mode_label(mode: Mode) -> str:
+    return {
+        'regular': 'רגיל',
+        'monthly': 'חודשי',
+        'weekly': 'שבועי',
+    }[mode]
+
+
+def build_chapter_message(user_id: int, mode: Mode, chapter: int) -> str:
+    data = load_tehillim(DATA_PATH)
+    text = data.get(str(chapter))
+    set_chapter(user_id, chapter, mode)
+    if not text:
+        return (
+            f"פרק {chapter} חסר בקובץ הנתונים.\n"
+            "אנא מלא/י את data/tehillim.json בכל הפרקים."
+        )
+    header = f"תהילים — פרק {chapter} (מצב: {build_mode_label(mode)})\n\n"
+    return header + text
+
+
+def build_daily_message_for_user(user_id: int) -> str:
+    now = tznow()
+    hy, hm, hd = hebrew.from_gregorian(now.year, now.month, now.day)
+    day = hd if hd <= 30 else 30
+    ch_from, ch_to = DAILY_SPLIT[day]
+    heb_date = to_hebrew_date_str(now)
+    header = f"חלוקה חודשית — {heb_date} (יום {day}): {render_range(ch_from, ch_to)}\n\n"
+    set_current_mode(user_id, 'monthly')
+    if ch_from == 119 and ch_to == 119 and os.path.exists(PS119_PARTS_PATH):
+        parts = load_ps119_parts(PS119_PARTS_PATH)
+        part_text = parts.get(str(day))
+        if part_text:
+            set_chapter(user_id, 119, 'monthly')
+            return f"{header}פרק קי\"ט - חלק יום {day}\n\n{part_text}"
+    set_chapter(user_id, ch_from, 'monthly')
+    data = load_tehillim(DATA_PATH)
+    txt = data.get(str(ch_from))
+    if not txt:
+        try:
+            txt = fetch_psalm(ch_from)
+            data[str(ch_from)] = txt
+            os.makedirs(os.path.dirname(DATA_PATH) or ".", exist_ok=True)
+            with open(DATA_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            txt = f"[חסר טקסט לפרק {ch_from}]"
+    return f"{header}— פרק {ch_from} —\n{txt}\n"
+
+
+def build_weekly_message_for_user(user_id: int) -> str:
+    now = tznow()
+    weekday = now.isoweekday()
+    ch_from, ch_to = WEEKLY_SPLIT[weekday]
+    header = f"חלוקה שבועית — יום {weekday}: {render_range(ch_from, ch_to)}\n\n"
+    set_current_mode(user_id, 'weekly')
+    set_chapter(user_id, ch_from, 'weekly')
+    data = load_tehillim(DATA_PATH)
+    t = data.get(str(ch_from), f"[חסר טקסט לפרק {ch_from}]")
+    return f"{header}— פרק {ch_from} —\n{t}\n"
+
+
+def trim_for_edit(text: str, limit: int = 3500) -> str:
+    if len(text) <= limit:
+        return text
+    suffix = "\n\n[הטקסט קוצר לתצוגה]"
+    return text[: max(0, limit - len(suffix))].rstrip() + suffix
+
+
+async def edit_nav_message(q, text: str) -> None:
+    try:
+        await q.message.edit_text(text, reply_markup=build_nav_keyboard())
+    except BadRequest as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            return
+        if "message is too long" in msg:
+            trimmed = trim_for_edit(text)
+            await q.message.edit_text(trimmed, reply_markup=build_nav_keyboard())
+            return
+        raise
+
+
 def normalize_chapter(n: int) -> int:
     if n < 1:
         return MAX_CHAPTER
@@ -422,6 +506,7 @@ def normalize_chapter(n: int) -> int:
 
 # Messaging
 async def send_text_with_nav(update: Update, full_text: str) -> None:
+    # For initial sends (commands like /start), we still send a new message.
     chunks = split_to_chunks(full_text)
     for i, ch in enumerate(chunks, start=1):
         if i == len(chunks):
@@ -601,28 +686,33 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "next":
         mode = get_current_mode(user_id)
         chapter = normalize_chapter(get_chapter(user_id, mode) + 1)
-        await send_chapter(update, context, chapter)
+        text = build_chapter_message(user_id, mode, chapter)
+        await edit_nav_message(q, text)
     elif data == "prev":
         mode = get_current_mode(user_id)
         chapter = normalize_chapter(get_chapter(user_id, mode) - 1)
-        await send_chapter(update, context, chapter)
+        text = build_chapter_message(user_id, mode, chapter)
+        await edit_nav_message(q, text)
     elif data == "reset":
         mode = get_current_mode(user_id)
         set_chapter(user_id, 1, mode)
-        await q.edit_message_reply_markup(reply_markup=None)
-        await q.message.reply_text("הסימנייה אופסה לפרק 1.")
-        await send_chapter(update, context, 1)
+        await q.answer("הסימנייה אופסה לפרק 1.")
+        text = build_chapter_message(user_id, mode, 1)
+        await edit_nav_message(q, text)
     elif data == "goto":
         await q.message.reply_text("הקלד/י מספר פרק (1–150):")
         context.user_data["awaiting_goto"] = True
     elif data == "daily":
-        await cmd_daily(update, context)
+        text = build_daily_message_for_user(user_id)
+        await edit_nav_message(q, text)
     elif data == "weekly":
-        await cmd_weekly(update, context)
+        text = build_weekly_message_for_user(user_id)
+        await edit_nav_message(q, text)
     elif data == "regular":
         set_current_mode(user_id, 'regular')
         chapter = get_chapter(user_id, 'regular')
-        await send_chapter(update, context, chapter)
+        text = build_chapter_message(user_id, 'regular', chapter)
+        await edit_nav_message(q, text)
 
 
 def main() -> None:
