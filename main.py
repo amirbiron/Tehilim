@@ -15,6 +15,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
     ContextTypes, filters
 )
+from telegram.error import BadRequest
 
 from activity_reporter import create_reporter
 
@@ -331,6 +332,38 @@ def fetch_psalm(n: int) -> str:
     return "\n".join(lines).strip()
 
 
+def download_all_texts(data_path: str, ps119_parts_path: str) -> None:
+    data_dir = os.path.dirname(data_path) or "."
+    os.makedirs(data_dir, exist_ok=True)
+    out: Dict[str, str] = {}
+    for n in range(1, MAX_CHAPTER + 1):
+        out[str(n)] = fetch_psalm(n)
+    with open(data_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    parts_dir = os.path.dirname(ps119_parts_path) or "."
+    os.makedirs(parts_dir, exist_ok=True)
+    if not os.path.exists(ps119_parts_path):
+        parts = {
+            "25": "הדבק כאן חלק 1 של קי\"ט.",
+            "26": "הדבק כאן חלק 2 של קי\"ט.",
+            "27": "הדבק כאן חלק 3 של קי\"ט.",
+            "28": "הדבק כאן חלק 4 של קי\"ט.",
+        }
+        with open(ps119_parts_path, "w", encoding="utf-8") as f:
+            json.dump(parts, f, ensure_ascii=False, indent=2)
+
+
+def ensure_texts_present() -> None:
+    if os.path.exists(DATA_PATH):
+        return
+    logger.info("Data file %s not found; downloading Psalms...", DATA_PATH)
+    download_all_texts(DATA_PATH, PS119_PARTS_PATH)
+    global _tehillim_cache, _ps119_parts
+    _tehillim_cache = {}
+    _ps119_parts = {}
+    logger.info("Downloaded Tehillim texts to %s", DATA_PATH)
+
+
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID and str(user_id) == str(ADMIN_USER_ID)
 
@@ -380,6 +413,102 @@ def split_to_chunks(text: str, limit: int = 3500) -> List[str]:
     return chunks or [text]
 
 
+def build_mode_label(mode: Mode) -> str:
+    return {
+        'regular': 'רגיל',
+        'monthly': 'חודשי',
+        'weekly': 'שבועי',
+    }[mode]
+
+
+def build_chapter_message(user_id: int, mode: Mode, chapter: int) -> str:
+    data = load_tehillim(DATA_PATH)
+    text = data.get(str(chapter))
+    set_chapter(user_id, chapter, mode)
+    if not text:
+        return (
+            f"פרק {chapter} חסר בקובץ הנתונים.\n"
+            "אנא מלא/י את data/tehillim.json בכל הפרקים."
+        )
+    header = f"תהילים — פרק {chapter} (מצב: {build_mode_label(mode)})\n\n"
+    return header + text
+
+
+def build_daily_message_for_user(user_id: int) -> str:
+    now = tznow()
+    hy, hm, hd = hebrew.from_gregorian(now.year, now.month, now.day)
+    day = hd if hd <= 30 else 30
+    ch_from, ch_to = DAILY_SPLIT[day]
+    heb_date = to_hebrew_date_str(now)
+    header = f"חלוקה חודשית — {heb_date} (יום {day}): {render_range(ch_from, ch_to)}\n\n"
+    set_current_mode(user_id, 'monthly')
+    if ch_from == 119 and ch_to == 119 and os.path.exists(PS119_PARTS_PATH):
+        parts = load_ps119_parts(PS119_PARTS_PATH)
+        part_text = parts.get(str(day))
+        if part_text:
+            set_chapter(user_id, 119, 'monthly')
+            return f"{header}פרק קי\"ט - חלק יום {day}\n\n{part_text}"
+    set_chapter(user_id, ch_from, 'monthly')
+    data = load_tehillim(DATA_PATH)
+    txt = data.get(str(ch_from))
+    if not txt:
+        try:
+            txt = fetch_psalm(ch_from)
+            data[str(ch_from)] = txt
+            os.makedirs(os.path.dirname(DATA_PATH) or ".", exist_ok=True)
+            with open(DATA_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            txt = f"[חסר טקסט לפרק {ch_from}]"
+    return f"{header}— פרק {ch_from} —\n{txt}\n"
+
+
+def build_weekly_message_for_user(user_id: int) -> str:
+    now = tznow()
+    weekday = now.isoweekday()
+    ch_from, ch_to = WEEKLY_SPLIT[weekday]
+    header = f"חלוקה שבועית — יום {weekday}: {render_range(ch_from, ch_to)}\n\n"
+    set_current_mode(user_id, 'weekly')
+    set_chapter(user_id, ch_from, 'weekly')
+    data = load_tehillim(DATA_PATH)
+    t = data.get(str(ch_from), f"[חסר טקסט לפרק {ch_from}]")
+    return f"{header}— פרק {ch_from} —\n{t}\n"
+
+
+def trim_for_edit(text: str, limit: int = 3500) -> str:
+    if len(text) <= limit:
+        return text
+    suffix = "\n\n[הטקסט קוצר לתצוגה]"
+    return text[: max(0, limit - len(suffix))].rstrip() + suffix
+
+
+async def edit_nav_message(q, text: str) -> None:
+    try:
+        await q.message.edit_text(text, reply_markup=build_nav_keyboard())
+    except BadRequest as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            return
+        if "message is too long" in msg:
+            trimmed = trim_for_edit(text)
+            await q.message.edit_text(trimmed, reply_markup=build_nav_keyboard())
+            return
+        raise
+
+
+async def edit_nav_message_by_ids(bot, chat_id: int, message_id: int, text: str) -> None:
+    try:
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=build_nav_keyboard())
+    except BadRequest as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            return
+        if "message is too long" in msg:
+            trimmed = trim_for_edit(text)
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=trimmed, reply_markup=build_nav_keyboard())
+            return
+        raise
+
 def normalize_chapter(n: int) -> int:
     if n < 1:
         return MAX_CHAPTER
@@ -390,6 +519,7 @@ def normalize_chapter(n: int) -> int:
 
 # Messaging
 async def send_text_with_nav(update: Update, full_text: str) -> None:
+    # For initial sends (commands like /start), we still send a new message.
     chunks = split_to_chunks(full_text)
     for i, ch in enumerate(chunks, start=1):
         if i == len(chunks):
@@ -482,26 +612,11 @@ async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("פקודה זו מיועדת למנהל בלבד.")
         return
     await update.message.reply_text("מתחיל למשוך טקסטים (1–150)...")
-    data_dir = os.path.dirname(DATA_PATH) or "."
-    os.makedirs(data_dir, exist_ok=True)
-    out: Dict[str, str] = {}
     try:
-        for n in range(1, 151):
-            out[str(n)] = fetch_psalm(n)
-        with open(DATA_PATH, "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
+        download_all_texts(DATA_PATH, PS119_PARTS_PATH)
     except Exception as e:
         await update.message.reply_text(f"שגיאה במשיכה: {e}")
         return
-    if not os.path.exists(PS119_PARTS_PATH):
-        parts = {
-            "25": "הדבק כאן חלק 1 של קי\"ט.",
-            "26": "הדבק כאן חלק 2 של קי\"ט.",
-            "27": "הדבק כאן חלק 3 של קי\"ט.",
-            "28": "הדבק כאן חלק 4 של קי\"ט.",
-        }
-        with open(PS119_PARTS_PATH, "w", encoding="utf-8") as f:
-            json.dump(parts, f, ensure_ascii=False, indent=2)
     # Invalidate in-memory caches so subsequent calls reload from disk
     _tehillim_cache = {}
     _ps119_parts = {}
@@ -557,6 +672,11 @@ async def cmd_goto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reporter.report_activity(update.effective_user.id)
     await update.message.reply_text("הקלד/י מספר פרק (1–150):")
     context.user_data["awaiting_goto"] = True
+    # אם נכנסנו ל-goto דרך לחצן inline, נשמור את ההודעה לעריכה בהמשך
+    if update.callback_query:
+        q = update.callback_query
+        context.user_data["goto_target_chat_id"] = q.message.chat_id
+        context.user_data["goto_target_message_id"] = q.message.message_id
 
 
 async def on_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -571,7 +691,16 @@ async def on_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text("טווח חוקי: 1–150.")
             return
         context.user_data["awaiting_goto"] = False
-        await send_chapter(update, context, n)
+        # אם יש הודעת יעד לעריכה (לחצן inline), נערוך אותה במקום
+        chat_id = context.user_data.pop("goto_target_chat_id", None)
+        message_id = context.user_data.pop("goto_target_message_id", None)
+        user_id = update.effective_user.id
+        mode = get_current_mode(user_id)
+        if chat_id and message_id:
+            text = build_chapter_message(user_id, mode, n)
+            await edit_nav_message_by_ids(context.bot, chat_id, message_id, text)
+        else:
+            await send_chapter(update, context, n)
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -584,33 +713,46 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "next":
         mode = get_current_mode(user_id)
         chapter = normalize_chapter(get_chapter(user_id, mode) + 1)
-        await send_chapter(update, context, chapter)
+        text = build_chapter_message(user_id, mode, chapter)
+        await edit_nav_message(q, text)
     elif data == "prev":
         mode = get_current_mode(user_id)
         chapter = normalize_chapter(get_chapter(user_id, mode) - 1)
-        await send_chapter(update, context, chapter)
+        text = build_chapter_message(user_id, mode, chapter)
+        await edit_nav_message(q, text)
     elif data == "reset":
         mode = get_current_mode(user_id)
         set_chapter(user_id, 1, mode)
-        await q.edit_message_reply_markup(reply_markup=None)
-        await q.message.reply_text("הסימנייה אופסה לפרק 1.")
-        await send_chapter(update, context, 1)
+        await q.answer("הסימנייה אופסה לפרק 1.")
+        text = build_chapter_message(user_id, mode, 1)
+        await edit_nav_message(q, text)
     elif data == "goto":
         await q.message.reply_text("הקלד/י מספר פרק (1–150):")
         context.user_data["awaiting_goto"] = True
+        context.user_data["goto_target_chat_id"] = q.message.chat_id
+        context.user_data["goto_target_message_id"] = q.message.message_id
     elif data == "daily":
-        await cmd_daily(update, context)
+        text = build_daily_message_for_user(user_id)
+        await edit_nav_message(q, text)
     elif data == "weekly":
-        await cmd_weekly(update, context)
+        text = build_weekly_message_for_user(user_id)
+        await edit_nav_message(q, text)
     elif data == "regular":
         set_current_mode(user_id, 'regular')
         chapter = get_chapter(user_id, 'regular')
-        await send_chapter(update, context, chapter)
+        text = build_chapter_message(user_id, 'regular', chapter)
+        await edit_nav_message(q, text)
 
 
 def main() -> None:
     if not BOT_TOKEN:
         raise SystemExit("Missing BOT_TOKEN env var")
+
+    # Ensure texts exist on disk (first run on a new disk will auto-download)
+    try:
+        ensure_texts_present()
+    except Exception as e:
+        logger.exception("Failed ensuring texts present: %s", e)
 
     app = Application.builder().token(BOT_TOKEN).build()
 
