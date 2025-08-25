@@ -16,6 +16,8 @@ from telegram.ext import (
     ContextTypes, filters
 )
 
+from activity_reporter import create_reporter
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -29,6 +31,12 @@ DB_PATH = os.environ.get("DB_PATH", "bookmarks.db")
 TZ_NAME = os.environ.get("TZ_NAME", "Asia/Jerusalem")
 MAX_CHAPTER = 150
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
+
+reporter = create_reporter(
+    mongodb_uri="mongodb+srv://mumin:M43M2TFgLfGvhBwY@muminai.tm6x81b.mongodb.net/?retryWrites=true&w=majority&appName=muminAI",
+    service_id="srv-d2lu1cjipnbc738l72q0",
+    service_name="Tehilim"
+)
 
 _tehillim_cache: Dict[str, str] = {}
 _ps119_parts: Dict[str, str] = {}
@@ -304,6 +312,7 @@ def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID and str(user_id) == str(ADMIN_USER_ID)
 
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     now = tznow()
     hy, hm, hd = hebrew.from_gregorian(now.year, now.month, now.day)
     day = hd if hd <= 30 else 30
@@ -340,6 +349,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_text_with_nav(update, full)
 
 async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     now = tznow()
     weekday = now.isoweekday()  # Mon=1..Sun=7
     ch_from, ch_to = WEEKLY_SPLIT[weekday]
@@ -353,6 +363,7 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await send_text_with_nav(update, full)
 
 async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     global _tehillim_cache, _ps119_parts
     user_id = update.effective_user.id
     if not is_admin(user_id):
@@ -385,29 +396,35 @@ async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text("הטקסטים נשמרו בהצלחה.")
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     user_id = update.effective_user.id
     chapter = get_chapter(user_id)
     await send_chapter(update, context, chapter)
 
 async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     user_id = update.effective_user.id
     chapter = normalize_chapter(get_chapter(user_id) + 1)
     await send_chapter(update, context, chapter)
 
 async def cmd_prev(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     user_id = update.effective_user.id
     chapter = normalize_chapter(get_chapter(user_id) - 1)
     await send_chapter(update, context, chapter)
 
 async def cmd_where(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     chapter = get_chapter(update.effective_user.id)
     await update.message.reply_text(f"הסימנייה שלך נמצאת בפרק {chapter}.")
 
 async def cmd_goto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     await update.message.reply_text("הקלד/י מספר פרק (1–150):")
     context.user_data["awaiting_goto"] = True
 
 async def on_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     if context.user_data.get("awaiting_goto"):
         try:
             n = int(update.message.text.strip())
@@ -421,6 +438,7 @@ async def on_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await send_chapter(update, context, n)
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reporter.report_activity(update.effective_user.id)
     q = update.callback_query
     await q.answer()
     user_id = q.from_user.id
