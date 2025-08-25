@@ -299,24 +299,22 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await send_text_with_nav(update, full)
             return
 
-    # Otherwise, send all chapters in the day's monthly range.
+    # Otherwise, send only the first chapter in the day's monthly range and set bookmark.
     set_chapter(user_id, ch_from)
     data = load_tehillim(DATA_PATH)
-    parts: List[str] = [header]
-    for n in range(ch_from, ch_to + 1):
-        txt = data.get(str(n))
-        if not txt:
-            try:
-                txt = fetch_psalm(n)
-                data[str(n)] = txt
-                # Persist back to file so next time it's available
-                os.makedirs(os.path.dirname(DATA_PATH) or ".", exist_ok=True)
-                with open(DATA_PATH, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-            except Exception:
-                txt = f"[חסר טקסט לפרק {n}]"
-        parts.append(f"— פרק {n} —\n{txt}\n")
-    await send_text_with_nav(update, "".join(parts))
+    txt = data.get(str(ch_from))
+    if not txt:
+        try:
+            txt = fetch_psalm(ch_from)
+            data[str(ch_from)] = txt
+            # Persist back to file so next time it's available
+            os.makedirs(os.path.dirname(DATA_PATH) or ".", exist_ok=True)
+            with open(DATA_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            txt = f"[חסר טקסט לפרק {ch_from}]"
+    full = f"{header}— פרק {ch_from} —\n{txt}\n"
+    await send_text_with_nav(update, full)
 
 async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = tznow()
