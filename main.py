@@ -227,7 +227,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if ch_from == 119 and ch_to == 119 and os.path.exists(PS119_PARTS_PATH):
         parts = load_ps119_parts(PS119_PARTS_PATH)
         if str(day) in parts:
-            full = f"{header}פרק קי"ט - חלק יום {day}\n\n{parts[str(day)]}"
+            full = f"{header}פרק קי\"ט - חלק יום {day}\n\n{parts[str(day)]}"
             await send_text_with_nav(update, full)
             return
 
@@ -269,14 +269,14 @@ async def cmd_load_texts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     if not os.path.exists(PS119_PARTS_PATH):
         parts = {
-            "25": "הדבק כאן חלק 1 של קי\"ט (לפי האותיות/מנהג שבחרת).",
+            "25": "הדבק כאן חלק 1 של קי\"ט.",
             "26": "הדבק כאן חלק 2 של קי\"ט.",
             "27": "הדבק כאן חלק 3 של קי\"ט.",
             "28": "הדבק כאן חלק 4 של קי\"ט.",
         }
         with open(PS119_PARTS_PATH, "w", encoding="utf-8") as f:
             json.dump(parts, f, ensure_ascii=False, indent=2)
-    await update.message.reply_text("הטקסטים נשמרו ל־data/tehillim.json. אפשר להתחיל 🙂")
+    await update.message.reply_text("הטקסטים נשמרו בהצלחה.")
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
